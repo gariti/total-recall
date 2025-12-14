@@ -280,20 +280,31 @@ impl Screen for BrowserScreen {
             .current_sessions
             .iter()
             .map(|s| {
-                let name = s.display_name();
                 let date = s.last_message.format(&self.config.display.date_format);
 
-                // Show agent sessions differently if configured
-                let name_style = if s.is_agent {
+                // Use preview text instead of session name
+                let preview = if s.preview_text.is_empty() {
+                    s.display_name()
+                } else {
+                    // Truncate to fit in list
+                    if s.preview_text.len() > 60 {
+                        format!("{}...", &s.preview_text[..60])
+                    } else {
+                        s.preview_text.clone()
+                    }
+                };
+
+                // Show agent sessions differently
+                let text_style = if s.is_agent {
                     Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::White)
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(name, name_style),
-                    Span::raw("  "),
                     Span::styled(date.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::raw("  "),
+                    Span::styled(preview, text_style),
                 ]))
             })
             .collect();
