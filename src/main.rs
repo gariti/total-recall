@@ -401,10 +401,7 @@ async fn main() -> Result<()> {
             // Get git remote and open in browser
             if let Some(remote) = get_git_remote_url(&project_path) {
                 if let Some(url) = git_remote_to_github_url(&remote) {
-                    if let Err(e) = std::process::Command::new("xdg-open")
-                        .arg(&url)
-                        .spawn()
-                    {
+                    if let Err(e) = open::that_detached(&url) {
                         eprintln!("Failed to open browser: {}", e);
                     }
                 } else {

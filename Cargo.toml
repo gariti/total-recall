@@ -1,6 +1,6 @@
 [package]
 name = "total-recall"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 description = "TUI for browsing and resuming Claude Code sessions"
 authors = ["Garrett"]
@@ -43,6 +43,7 @@ async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2"
+open = "5"
 
 [profile.release]
 lto = true
