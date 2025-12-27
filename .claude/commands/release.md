@@ -16,7 +16,8 @@ Use TodoWrite to create a todo list with these items:
 4. Fix any issues
 5. Summarize changes
 6. Choose version increment
-7. Update version and release
+7. User validation
+8. Update version and release
 
 ## Step 2: Run checks
 
@@ -59,7 +60,19 @@ Include the current version and what each option would result in.
 
 If the user declines or says no, stop the workflow gracefully.
 
-## Step 8: Update version and release
+## Step 8: User validation
+
+Open a new terminal with `cargo run` so the user can manually test the changes before releasing:
+
+```bash
+wezterm start --always-new-process --cwd '/home/garrett/Projects/total-recall' -- cargo run
+```
+
+Use AskUserQuestion to ask the user to confirm the changes work as expected. Wait for their approval before proceeding to the release step.
+
+If the user finds issues, fix them and return to step 2 (run checks again).
+
+## Step 9: Update version and release
 
 1. Edit Cargo.toml to update the version number to the new version
 2. Run `./scripts/release.sh` to:
