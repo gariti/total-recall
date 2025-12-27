@@ -23,6 +23,14 @@ pub enum ScreenAction {
     LaunchSession { session_id: String, project_path: String },
     /// Start a new Claude session in the given project path.
     NewSession { project_path: String },
+    /// Open lazygit in the project directory.
+    OpenLazygit { project_path: String },
+    /// Open GitHub in browser.
+    OpenGithub { project_path: String },
+    /// Open terminal in the project directory.
+    OpenTerminal { project_path: String },
+    /// Open editor in the project directory.
+    OpenEditor { project_path: String },
 }
 
 /// Trait for screen implementations.

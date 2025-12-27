@@ -67,6 +67,44 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Parse a git remote URL to a GitHub browser URL.
+fn git_remote_to_github_url(remote: &str) -> Option<String> {
+    let remote = remote.trim();
+
+    // Handle SSH format: git@github.com:user/repo.git
+    if let Some(rest) = remote.strip_prefix("git@github.com:") {
+        let repo = rest.trim_end_matches(".git");
+        return Some(format!("https://github.com/{}", repo));
+    }
+
+    // Handle HTTPS format: https://github.com/user/repo.git
+    if remote.starts_with("https://github.com/") {
+        let url = remote.trim_end_matches(".git");
+        return Some(url.to_string());
+    }
+
+    // Handle other git hosts similarly if needed
+    None
+}
+
+/// Get the git remote origin URL for a project.
+fn get_git_remote_url(project_path: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_path)
+        .arg("remote")
+        .arg("get-url")
+        .arg("origin")
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        None
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -307,6 +345,186 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
             // New terminal spawned successfully, exit this instance
+        }
+        app::AppResult::OpenLazygit { project_path } => {
+            // Spawn a terminal with lazygit in the project directory
+            let terminal = detect_terminal();
+
+            let result = match terminal.as_str() {
+                "kitty" => {
+                    std::process::Command::new("kitty")
+                        .arg("--detach")
+                        .arg("--directory")
+                        .arg(&project_path)
+                        .arg("lazygit")
+                        .spawn()
+                }
+                "wezterm" => {
+                    let spawn_cmd = format!(
+                        "nohup wezterm start --always-new-process --cwd '{}' -- lazygit >/dev/null 2>&1 &",
+                        project_path.replace('\'', "'\\''")
+                    );
+                    let result = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&spawn_cmd)
+                        .spawn();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    result
+                }
+                "alacritty" => std::process::Command::new("alacritty")
+                    .arg("--working-directory")
+                    .arg(&project_path)
+                    .arg("-e")
+                    .arg("lazygit")
+                    .spawn(),
+                "foot" => std::process::Command::new("foot")
+                    .arg("--working-directory")
+                    .arg(&project_path)
+                    .arg("lazygit")
+                    .spawn(),
+                _ => {
+                    let cmd = format!("cd {} && lazygit", shell_escape(&project_path));
+                    std::process::Command::new("x-terminal-emulator")
+                        .arg("-e")
+                        .arg("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .spawn()
+                }
+            };
+
+            if let Err(e) = result {
+                eprintln!("Failed to launch lazygit: {}", e);
+            }
+        }
+        app::AppResult::OpenGithub { project_path } => {
+            // Get git remote and open in browser
+            if let Some(remote) = get_git_remote_url(&project_path) {
+                if let Some(url) = git_remote_to_github_url(&remote) {
+                    if let Err(e) = std::process::Command::new("xdg-open")
+                        .arg(&url)
+                        .spawn()
+                    {
+                        eprintln!("Failed to open browser: {}", e);
+                    }
+                } else {
+                    eprintln!("Could not parse git remote URL: {}", remote.trim());
+                }
+            } else {
+                eprintln!("No git remote origin found for: {}", project_path);
+            }
+        }
+        app::AppResult::OpenTerminal { project_path } => {
+            // Spawn a terminal in the project directory
+            let terminal = detect_terminal();
+
+            let result = match terminal.as_str() {
+                "kitty" => {
+                    std::process::Command::new("kitty")
+                        .arg("--detach")
+                        .arg("--directory")
+                        .arg(&project_path)
+                        .spawn()
+                }
+                "wezterm" => {
+                    let spawn_cmd = format!(
+                        "nohup wezterm start --always-new-process --cwd '{}' >/dev/null 2>&1 &",
+                        project_path.replace('\'', "'\\''")
+                    );
+                    let result = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&spawn_cmd)
+                        .spawn();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    result
+                }
+                "alacritty" => std::process::Command::new("alacritty")
+                    .arg("--working-directory")
+                    .arg(&project_path)
+                    .spawn(),
+                "foot" => std::process::Command::new("foot")
+                    .arg("--working-directory")
+                    .arg(&project_path)
+                    .spawn(),
+                "gnome-terminal" => std::process::Command::new("gnome-terminal")
+                    .arg("--working-directory")
+                    .arg(&project_path)
+                    .spawn(),
+                "konsole" => std::process::Command::new("konsole")
+                    .arg("--workdir")
+                    .arg(&project_path)
+                    .spawn(),
+                _ => {
+                    let cmd = format!("cd {}", shell_escape(&project_path));
+                    std::process::Command::new("x-terminal-emulator")
+                        .arg("-e")
+                        .arg("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .spawn()
+                }
+            };
+
+            if let Err(e) = result {
+                eprintln!("Failed to open terminal: {}", e);
+            }
+        }
+        app::AppResult::OpenEditor { project_path } => {
+            // Get editor from $EDITOR env var
+            let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
+            let terminal = detect_terminal();
+
+            let result = match terminal.as_str() {
+                "kitty" => {
+                    std::process::Command::new("kitty")
+                        .arg("--detach")
+                        .arg("--directory")
+                        .arg(&project_path)
+                        .arg(&editor)
+                        .arg(&project_path)
+                        .spawn()
+                }
+                "wezterm" => {
+                    let spawn_cmd = format!(
+                        "nohup wezterm start --always-new-process --cwd '{}' -- {} '{}' >/dev/null 2>&1 &",
+                        project_path.replace('\'', "'\\''"),
+                        editor,
+                        project_path.replace('\'', "'\\''")
+                    );
+                    let result = std::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(&spawn_cmd)
+                        .spawn();
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    result
+                }
+                "alacritty" => std::process::Command::new("alacritty")
+                    .arg("--working-directory")
+                    .arg(&project_path)
+                    .arg("-e")
+                    .arg(&editor)
+                    .arg(&project_path)
+                    .spawn(),
+                "foot" => std::process::Command::new("foot")
+                    .arg("--working-directory")
+                    .arg(&project_path)
+                    .arg(&editor)
+                    .arg(&project_path)
+                    .spawn(),
+                _ => {
+                    let cmd = format!("cd {} && {} {}", shell_escape(&project_path), editor, shell_escape(&project_path));
+                    std::process::Command::new("x-terminal-emulator")
+                        .arg("-e")
+                        .arg("sh")
+                        .arg("-c")
+                        .arg(&cmd)
+                        .spawn()
+                }
+            };
+
+            if let Err(e) = result {
+                eprintln!("Failed to open editor: {}", e);
+            }
         }
     }
 

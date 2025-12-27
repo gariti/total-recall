@@ -17,9 +17,8 @@ const QUAID: &str = r#"
 
      "Get your ass to Claude."
 
-     ← →  Navigate
-     Enter  Resume session
-     q  Quit
+     g Git  b GitHub  t Terminal  e Editor
+     Enter Resume  n New  q Quit
 "#;
 
 /// Mars dome skyline with red planet atmosphere
@@ -36,9 +35,8 @@ const MARS_DOME: &str = r#"
 
      "Get your ass to Claude."
 
-     ← →  Navigate
-     Enter  Resume session
-     q  Quit
+     g Git  b GitHub  t Terminal  e Editor
+     Enter Resume  n New  q Quit
 "#;
 
 /// The alien reactor core on Mars
@@ -57,9 +55,8 @@ const REACTOR: &str = r#"
 
      "Get your ass to Claude."
 
-     ← →  Navigate
-     Enter  Resume session
-     q  Quit
+     g Git  b GitHub  t Terminal  e Editor
+     Enter Resume  n New  q Quit
 "#;
 
 /// "Two weeks" disguise lady
@@ -77,9 +74,8 @@ const TWO_WEEKS: &str = r#"
 
      "Get your ass to Claude."
 
-     ← →  Navigate
-     Enter  Resume session
-     q  Quit
+     g Git  b GitHub  t Terminal  e Editor
+     Enter Resume  n New  q Quit
 "#;
 
 /// Kuato - "Open your mind..."
@@ -97,9 +93,8 @@ const KUATO: &str = r#"
 
      "Get your ass to Claude."
 
-     ← →  Navigate
-     Enter  Resume session
-     q  Quit
+     g Git  b GitHub  t Terminal  e Editor
+     Enter Resume  n New  q Quit
 "#;
 
 /// Venusville - the mutant bar
@@ -117,9 +112,8 @@ const VENUSVILLE: &str = r#"
 
      "Get your ass to Claude."
 
-     ← →  Navigate
-     Enter  Resume session
-     q  Quit
+     g Git  b GitHub  t Terminal  e Editor
+     Enter Resume  n New  q Quit
 "#;
 
 /// All available ASCII art pieces.

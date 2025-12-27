@@ -25,6 +25,14 @@ pub enum AppResult {
     LaunchSession { session_id: String, project_path: String },
     /// Start a new session in the given project.
     NewSession { project_path: String },
+    /// Open lazygit in the project directory.
+    OpenLazygit { project_path: String },
+    /// Open GitHub in browser.
+    OpenGithub { project_path: String },
+    /// Open terminal in the project directory.
+    OpenTerminal { project_path: String },
+    /// Open editor in the project directory.
+    OpenEditor { project_path: String },
 }
 
 /// Application state.
@@ -33,6 +41,10 @@ pub struct App {
     should_quit: bool,
     launch_session: Option<(String, String)>,
     new_session: Option<String>,
+    open_lazygit: Option<String>,
+    open_github: Option<String>,
+    open_terminal: Option<String>,
+    open_editor: Option<String>,
 
     // Theme
     theme: Arc<Theme>,
@@ -69,6 +81,10 @@ impl App {
             should_quit: false,
             launch_session: None,
             new_session: None,
+            open_lazygit: None,
+            open_github: None,
+            open_terminal: None,
+            open_editor: None,
             theme,
             browser_screen,
             status_message: "Loading sessions...".to_string(),
@@ -152,6 +168,22 @@ impl App {
                                             self.new_session = Some(project_path);
                                             self.should_quit = true;
                                         }
+                                        crate::screens::ScreenAction::OpenLazygit { project_path } => {
+                                            self.open_lazygit = Some(project_path);
+                                            self.should_quit = true;
+                                        }
+                                        crate::screens::ScreenAction::OpenGithub { project_path } => {
+                                            self.open_github = Some(project_path);
+                                            self.should_quit = true;
+                                        }
+                                        crate::screens::ScreenAction::OpenTerminal { project_path } => {
+                                            self.open_terminal = Some(project_path);
+                                            self.should_quit = true;
+                                        }
+                                        crate::screens::ScreenAction::OpenEditor { project_path } => {
+                                            self.open_editor = Some(project_path);
+                                            self.should_quit = true;
+                                        }
                                     }
                                 }
                             }
@@ -169,6 +201,14 @@ impl App {
             AppResult::LaunchSession { session_id, project_path }
         } else if let Some(project_path) = self.new_session.take() {
             AppResult::NewSession { project_path }
+        } else if let Some(project_path) = self.open_lazygit.take() {
+            AppResult::OpenLazygit { project_path }
+        } else if let Some(project_path) = self.open_github.take() {
+            AppResult::OpenGithub { project_path }
+        } else if let Some(project_path) = self.open_terminal.take() {
+            AppResult::OpenTerminal { project_path }
+        } else if let Some(project_path) = self.open_editor.take() {
+            AppResult::OpenEditor { project_path }
         } else {
             AppResult::Exit
         })
@@ -220,15 +260,24 @@ impl App {
             Span::raw(" "),
             Span::styled(&self.status_message, Style::default().fg(self.theme.color7)),
             Span::raw(" │ "),
-            Span::styled("j/k", Style::default().fg(self.theme.color8)),
-            Span::styled(" Nav", Style::default().fg(self.theme.color7)),
+            Span::styled("g", Style::default().fg(self.theme.color8)),
+            Span::styled(" Git", Style::default().fg(self.theme.color7)),
+            Span::raw(" "),
+            Span::styled("b", Style::default().fg(self.theme.color8)),
+            Span::styled(" GitHub", Style::default().fg(self.theme.color7)),
+            Span::raw(" "),
+            Span::styled("t", Style::default().fg(self.theme.color8)),
+            Span::styled(" Term", Style::default().fg(self.theme.color7)),
+            Span::raw(" "),
+            Span::styled("e", Style::default().fg(self.theme.color8)),
+            Span::styled(" Edit", Style::default().fg(self.theme.color7)),
             Span::raw(" │ "),
             Span::styled("Enter", Style::default().fg(self.theme.color8)),
             Span::styled(" Resume", Style::default().fg(self.theme.color7)),
-            Span::raw(" │ "),
+            Span::raw(" "),
             Span::styled("n", Style::default().fg(self.theme.color8)),
             Span::styled(" New", Style::default().fg(self.theme.color7)),
-            Span::raw(" │ "),
+            Span::raw(" "),
             Span::styled("q", Style::default().fg(self.theme.color8)),
             Span::styled(" Quit", Style::default().fg(self.theme.color7)),
         ]));

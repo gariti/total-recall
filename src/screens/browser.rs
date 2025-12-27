@@ -37,6 +37,7 @@ pub struct BrowserScreen {
     focus: Focus,
     project_state: ListState,
     session_state: ListState,
+    sessions_visible: bool,
 
     // Cached data
     projects: Vec<Project>,
@@ -59,6 +60,7 @@ impl BrowserScreen {
             focus: Focus::Projects,
             project_state,
             session_state: ListState::default(),
+            sessions_visible: false,
             projects: Vec::new(),
             current_sessions: Vec::new(),
             splash_art: ascii_art::random_art(),
@@ -199,14 +201,22 @@ impl Screen for BrowserScreen {
             ])
             .split(area);
 
-        // Split right column: Preview on top (prominent), Sessions below
-        let right_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(60), // Preview (prominent)
-                Constraint::Percentage(40), // Sessions list
-            ])
-            .split(main_chunks[1]);
+        // Split right column: Preview on top (prominent), Sessions below (only if visible)
+        let right_chunks = if self.sessions_visible {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(60), // Preview (prominent)
+                    Constraint::Percentage(40), // Sessions list
+                ])
+                .split(main_chunks[1])
+        } else {
+            // Sessions hidden - preview takes full right side
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(100)])
+                .split(main_chunks[1])
+        };
 
         // Projects pane
         let project_items: Vec<ListItem> = self
@@ -306,74 +316,76 @@ impl Screen for BrowserScreen {
             f.render_widget(garnished_preview, right_chunks[0]);
         }
 
-        // Sessions pane (bottom right)
-        let session_items: Vec<ListItem> = self
-            .current_sessions
-            .iter()
-            .map(|s| {
-                let date = s.last_message.format(&self.config.display.date_format);
+        // Sessions pane (bottom right) - only show when visible
+        if self.sessions_visible {
+            let session_items: Vec<ListItem> = self
+                .current_sessions
+                .iter()
+                .map(|s| {
+                    let date = s.last_message.format(&self.config.display.date_format);
 
-                // Use preview text instead of session name
-                let preview = if s.preview_text.is_empty() {
-                    s.display_name()
-                } else {
-                    // Truncate to fit in list
-                    if s.preview_text.len() > 60 {
-                        format!("{}...", &s.preview_text[..60])
+                    // Use preview text instead of session name
+                    let preview = if s.preview_text.is_empty() {
+                        s.display_name()
                     } else {
-                        s.preview_text.clone()
-                    }
-                };
+                        // Truncate to fit in list
+                        if s.preview_text.len() > 60 {
+                            format!("{}...", &s.preview_text[..60])
+                        } else {
+                            s.preview_text.clone()
+                        }
+                    };
 
-                // Show agent sessions differently
-                let text_style = if s.is_agent {
-                    Style::default().fg(self.theme.color5)
+                    // Show agent sessions differently
+                    let text_style = if s.is_agent {
+                        Style::default().fg(self.theme.color5)
+                    } else {
+                        Style::default().fg(self.theme.foreground)
+                    };
+
+                    ListItem::new(Line::from(vec![
+                        Span::styled(date.to_string(), Style::default().fg(self.theme.color8)),
+                        Span::raw("  "),
+                        Span::styled(preview, text_style),
+                    ]))
+                })
+                .collect();
+
+            let project_name = self
+                .selected_project()
+                .map(|p| p.display_name.clone())
+                .unwrap_or_default();
+
+            let sessions_block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!(
+                    "Sessions - {} ({})",
+                    project_name,
+                    self.current_sessions.len()
+                ))
+                .border_style(if self.focus == Focus::Sessions {
+                    Style::default().fg(self.theme.color6)
                 } else {
-                    Style::default().fg(self.theme.foreground)
-                };
+                    Style::default().fg(self.theme.color8)
+                });
 
-                ListItem::new(Line::from(vec![
-                    Span::styled(date.to_string(), Style::default().fg(self.theme.color8)),
-                    Span::raw("  "),
-                    Span::styled(preview, text_style),
-                ]))
-            })
-            .collect();
+            let sessions_list = List::new(session_items)
+                .block(sessions_block)
+                .highlight_style(
+                    Style::default()
+                        .bg(self.theme.color8)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("► ");
 
-        let project_name = self
-            .selected_project()
-            .map(|p| p.display_name.clone())
-            .unwrap_or_default();
-
-        let sessions_block = Block::default()
-            .borders(Borders::ALL)
-            .title(format!(
-                "Sessions - {} ({})",
-                project_name,
-                self.current_sessions.len()
-            ))
-            .border_style(if self.focus == Focus::Sessions {
-                Style::default().fg(self.theme.color6)
+            // Add shadow effect when focused
+            if self.focus == Focus::Sessions {
+                let garnished =
+                    GarnishableStatefulWidget::garnish(sessions_list, HalfShadow::default());
+                f.render_stateful_widget(garnished, right_chunks[1], &mut self.session_state);
             } else {
-                Style::default().fg(self.theme.color8)
-            });
-
-        let sessions_list = List::new(session_items)
-            .block(sessions_block)
-            .highlight_style(
-                Style::default()
-                    .bg(self.theme.color8)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("► ");
-
-        // Add shadow effect when focused
-        if self.focus == Focus::Sessions {
-            let garnished =
-                GarnishableStatefulWidget::garnish(sessions_list, HalfShadow::default());
-            f.render_stateful_widget(garnished, right_chunks[1], &mut self.session_state);
-        } else {
-            f.render_stateful_widget(sessions_list, right_chunks[1], &mut self.session_state);
+                f.render_stateful_widget(sessions_list, right_chunks[1], &mut self.session_state);
+            }
         }
     }
 
@@ -398,34 +410,39 @@ impl BrowserScreen {
             KeyCode::Left | KeyCode::Char('h') => {
                 if self.focus == Focus::Sessions {
                     self.focus = Focus::Projects;
+                    self.sessions_visible = false;
                 }
                 ScreenAction::None
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 if self.focus == Focus::Projects && !self.current_sessions.is_empty() {
+                    self.sessions_visible = true;
                     self.focus = Focus::Sessions;
                 }
                 ScreenAction::None
             }
             KeyCode::Tab => {
                 // Cycle focus between panes
-                self.focus = match self.focus {
+                match self.focus {
                     Focus::Projects => {
                         if !self.current_sessions.is_empty() {
-                            Focus::Sessions
-                        } else {
-                            Focus::Projects
+                            self.sessions_visible = true;
+                            self.focus = Focus::Sessions;
                         }
                     }
-                    Focus::Sessions => Focus::Projects,
+                    Focus::Sessions => {
+                        self.sessions_visible = false;
+                        self.focus = Focus::Projects;
+                    }
                 };
                 ScreenAction::None
             }
             KeyCode::Enter | KeyCode::Char('y') => {
                 match self.focus {
                     Focus::Projects => {
-                        // Enter on project switches to sessions pane
+                        // Enter on project shows sessions and switches to sessions pane
                         if !self.current_sessions.is_empty() {
+                            self.sessions_visible = true;
                             self.focus = Focus::Sessions;
                         }
                         ScreenAction::None
@@ -446,6 +463,46 @@ impl BrowserScreen {
                 // Start a new session in the selected project
                 if let Some(project) = self.selected_project() {
                     ScreenAction::NewSession {
+                        project_path: project.decoded_path.clone(),
+                    }
+                } else {
+                    ScreenAction::None
+                }
+            }
+            KeyCode::Char('g') => {
+                // Open lazygit in the project directory
+                if let Some(project) = self.selected_project() {
+                    ScreenAction::OpenLazygit {
+                        project_path: project.decoded_path.clone(),
+                    }
+                } else {
+                    ScreenAction::None
+                }
+            }
+            KeyCode::Char('b') => {
+                // Open GitHub in browser
+                if let Some(project) = self.selected_project() {
+                    ScreenAction::OpenGithub {
+                        project_path: project.decoded_path.clone(),
+                    }
+                } else {
+                    ScreenAction::None
+                }
+            }
+            KeyCode::Char('t') => {
+                // Open terminal in the project directory
+                if let Some(project) = self.selected_project() {
+                    ScreenAction::OpenTerminal {
+                        project_path: project.decoded_path.clone(),
+                    }
+                } else {
+                    ScreenAction::None
+                }
+            }
+            KeyCode::Char('e') => {
+                // Open editor in the project directory
+                if let Some(project) = self.selected_project() {
+                    ScreenAction::OpenEditor {
                         project_path: project.decoded_path.clone(),
                     }
                 } else {
