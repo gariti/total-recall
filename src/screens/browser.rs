@@ -4,18 +4,21 @@ use async_trait::async_trait;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
+};
+use ratatui_garnish::{
+    shadow::HalfShadow, GarnishableStatefulWidget, GarnishableWidget, Padding,
 };
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::models::{Project, Session};
-use crate::services::{copy_to_clipboard, SessionStore};
+use crate::services::{ascii_art, SessionStore, Theme};
 
-use super::Screen;
+use super::{Screen, ScreenAction};
 
 /// Which pane has focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +31,7 @@ enum Focus {
 pub struct BrowserScreen {
     session_store: Arc<SessionStore>,
     config: Arc<Config>,
+    theme: Arc<Theme>,
 
     // UI state
     focus: Focus,
@@ -37,22 +41,27 @@ pub struct BrowserScreen {
     // Cached data
     projects: Vec<Project>,
     current_sessions: Vec<Session>,
+
+    // Splash art (randomly selected on startup)
+    splash_art: &'static str,
 }
 
 impl BrowserScreen {
     /// Create a new browser screen.
-    pub fn new(session_store: Arc<SessionStore>, config: Arc<Config>) -> Self {
+    pub fn new(session_store: Arc<SessionStore>, config: Arc<Config>, theme: Arc<Theme>) -> Self {
         let mut project_state = ListState::default();
         project_state.select(Some(0));
 
         Self {
             session_store,
             config,
+            theme,
             focus: Focus::Projects,
             project_state,
             session_state: ListState::default(),
             projects: Vec::new(),
             current_sessions: Vec::new(),
+            splash_art: ascii_art::random_art(),
         }
     }
 
@@ -176,19 +185,6 @@ impl BrowserScreen {
             Focus::Sessions => Focus::Projects,
         };
     }
-
-    /// Copy resume command for selected session.
-    fn copy_resume_command(&self) -> Option<String> {
-        if let Some(session) = self.selected_session() {
-            let cmd = session.resume_command();
-            if copy_to_clipboard(&cmd).is_ok() {
-                return Some(format!("Copied: {}", cmd));
-            } else {
-                return Some("Failed to copy to clipboard".to_string());
-            }
-        }
-        None
-    }
 }
 
 #[async_trait]
@@ -217,12 +213,12 @@ impl Screen for BrowserScreen {
             .projects
             .iter()
             .map(|p| {
-                let style = Style::default().fg(Color::White);
+                let style = Style::default().fg(self.theme.foreground);
                 ListItem::new(Line::from(vec![
                     Span::styled(&p.display_name, style),
                     Span::styled(
                         format!(" ({})", p.session_count),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(self.theme.color8),
                     ),
                 ]))
             })
@@ -232,48 +228,83 @@ impl Screen for BrowserScreen {
             .borders(Borders::ALL)
             .title(format!("Projects ({})", self.projects.len()))
             .border_style(if self.focus == Focus::Projects {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(self.theme.color6)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(self.theme.color8)
             });
 
         let projects_list = List::new(project_items)
             .block(projects_block)
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(self.theme.color8)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
-        f.render_stateful_widget(projects_list, main_chunks[0], &mut self.project_state);
+        // Add shadow effect when focused
+        if self.focus == Focus::Projects {
+            let garnished =
+                GarnishableStatefulWidget::garnish(projects_list, HalfShadow::default());
+            f.render_stateful_widget(garnished, main_chunks[0], &mut self.project_state);
+        } else {
+            f.render_stateful_widget(projects_list, main_chunks[0], &mut self.project_state);
+        }
 
         // Preview pane (prominent, top right)
-        let preview_text = if let Some(session) = self.selected_session() {
+        // Show ASCII art when on Projects view, show session preview when on Sessions view
+        let (preview_title, preview_text) = if self.focus == Focus::Projects {
+            ("total-recall", self.splash_art.to_string())
+        } else if let Some(session) = self.selected_session() {
             let branch_info = session
                 .git_branch
                 .as_ref()
                 .map(|b| format!(" [{}]", b))
                 .unwrap_or_default();
 
-            format!(
-                "{}{}\n{} messages | {}\n\n{}",
-                session.display_name(),
-                branch_info,
-                session.message_count,
-                session.duration_str(),
-                session.preview_text
+            (
+                "Preview",
+                format!(
+                    "{}{}\n{} messages | {}\n\n{}",
+                    session.display_name(),
+                    branch_info,
+                    session.message_count,
+                    session.duration_str(),
+                    session.preview_text
+                ),
             )
         } else {
-            "No session selected\n\nSelect a session to see preview".to_string()
+            (
+                "Preview",
+                "No session selected\n\nSelect a session to see preview".to_string(),
+            )
         };
 
-        let preview = Paragraph::new(preview_text)
-            .block(Block::default().borders(Borders::ALL).title("Preview"))
-            .style(Style::default().fg(Color::Gray))
-            .wrap(ratatui::widgets::Wrap { trim: true });
+        let preview_block = Block::default()
+            .borders(Borders::ALL)
+            .title(preview_title);
 
-        f.render_widget(preview, right_chunks[0]);
+        // Don't wrap ASCII art, only wrap preview text
+        if self.focus == Focus::Projects {
+            let preview = Paragraph::new(preview_text)
+                .block(preview_block)
+                .style(Style::default().fg(self.theme.color6));
+
+            let garnished_preview = preview
+                .garnish(Padding::horizontal(1))
+                .garnish(HalfShadow::default());
+            f.render_widget(garnished_preview, right_chunks[0]);
+        } else {
+            let preview = Paragraph::new(preview_text)
+                .block(preview_block)
+                .style(Style::default().fg(self.theme.color7))
+                .wrap(ratatui::widgets::Wrap { trim: true });
+
+            let garnished_preview = preview
+                .garnish(Padding::horizontal(1))
+                .garnish(HalfShadow::default());
+            f.render_widget(garnished_preview, right_chunks[0]);
+        }
 
         // Sessions pane (bottom right)
         let session_items: Vec<ListItem> = self
@@ -296,13 +327,13 @@ impl Screen for BrowserScreen {
 
                 // Show agent sessions differently
                 let text_style = if s.is_agent {
-                    Style::default().fg(Color::Yellow)
+                    Style::default().fg(self.theme.color5)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(self.theme.foreground)
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(date.to_string(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(date.to_string(), Style::default().fg(self.theme.color8)),
                     Span::raw("  "),
                     Span::styled(preview, text_style),
                 ]))
@@ -322,21 +353,28 @@ impl Screen for BrowserScreen {
                 self.current_sessions.len()
             ))
             .border_style(if self.focus == Focus::Sessions {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(self.theme.color6)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(self.theme.color8)
             });
 
         let sessions_list = List::new(session_items)
             .block(sessions_block)
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(self.theme.color8)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
-        f.render_stateful_widget(sessions_list, right_chunks[1], &mut self.session_state);
+        // Add shadow effect when focused
+        if self.focus == Focus::Sessions {
+            let garnished =
+                GarnishableStatefulWidget::garnish(sessions_list, HalfShadow::default());
+            f.render_stateful_widget(garnished, right_chunks[1], &mut self.session_state);
+        } else {
+            f.render_stateful_widget(sessions_list, right_chunks[1], &mut self.session_state);
+        }
     }
 
     async fn handle_key(&mut self, key: KeyEvent) {
@@ -346,28 +384,28 @@ impl Screen for BrowserScreen {
 }
 
 impl BrowserScreen {
-    /// Handle key event and return optional status message.
-    pub async fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
+    /// Handle key event and return action.
+    pub async fn handle_key(&mut self, key: KeyEvent) -> ScreenAction {
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_up();
-                None
+                ScreenAction::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.move_down();
-                None
+                ScreenAction::None
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 if self.focus == Focus::Sessions {
                     self.focus = Focus::Projects;
                 }
-                None
+                ScreenAction::None
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 if self.focus == Focus::Projects && !self.current_sessions.is_empty() {
                     self.focus = Focus::Sessions;
                 }
-                None
+                ScreenAction::None
             }
             KeyCode::Tab => {
                 // Cycle focus between panes
@@ -381,22 +419,40 @@ impl BrowserScreen {
                     }
                     Focus::Sessions => Focus::Projects,
                 };
-                None
+                ScreenAction::None
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Char('y') => {
                 match self.focus {
                     Focus::Projects => {
                         // Enter on project switches to sessions pane
                         if !self.current_sessions.is_empty() {
                             self.focus = Focus::Sessions;
                         }
-                        None
+                        ScreenAction::None
                     }
-                    Focus::Sessions => self.copy_resume_command(),
+                    Focus::Sessions => {
+                        if let Some(session) = self.selected_session() {
+                            ScreenAction::LaunchSession {
+                                session_id: session.id.clone(),
+                                project_path: session.project_path.clone(),
+                            }
+                        } else {
+                            ScreenAction::None
+                        }
+                    }
                 }
             }
-            KeyCode::Char('y') => self.copy_resume_command(),
-            _ => None,
+            KeyCode::Char('n') => {
+                // Start a new session in the selected project
+                if let Some(project) = self.selected_project() {
+                    ScreenAction::NewSession {
+                        project_path: project.decoded_path.clone(),
+                    }
+                } else {
+                    ScreenAction::None
+                }
+            }
+            _ => ScreenAction::None,
         }
     }
 }

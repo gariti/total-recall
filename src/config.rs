@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::path::PathBuf;
 
 /// Main configuration.
@@ -130,4 +131,29 @@ fn expand_path(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// Get Rust projects from $RUST_PROJECTS environment variable.
+/// Returns a list of project paths (colon-separated in the env var).
+pub fn rust_projects() -> Vec<PathBuf> {
+    env::var("RUST_PROJECTS")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(|s| PathBuf::from(expand_path(s)))
+        .filter(|p| p.exists())
+        .collect()
+}
+
+/// Get Rust projects from $RUST_PROJECTS_JSON environment variable.
+/// Returns a list of project paths (JSON array in the env var).
+pub fn rust_projects_json() -> Vec<PathBuf> {
+    env::var("RUST_PROJECTS_JSON")
+        .ok()
+        .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| PathBuf::from(expand_path(&s)))
+        .filter(|p| p.exists())
+        .collect()
 }

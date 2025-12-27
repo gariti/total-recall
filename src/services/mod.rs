@@ -1,7 +1,8 @@
 //! Backend services.
 
-pub mod clipboard;
+pub mod ascii_art;
 pub mod session_store;
+pub mod theme;
 
-pub use clipboard::copy_to_clipboard;
 pub use session_store::SessionStore;
+pub use theme::Theme;

@@ -109,7 +109,10 @@ impl SessionStore {
             }
 
             if let Ok(session) = self.parse_session_summary(path.to_path_buf()) {
-                sessions.push(session);
+                // Skip agent/sidechain sessions - they can't be resumed independently
+                if !session.is_agent {
+                    sessions.push(session);
+                }
             }
         }
 
@@ -125,7 +128,13 @@ impl SessionStore {
         let metadata = file.metadata()?;
         let reader = BufReader::new(file);
 
-        let mut session_id = String::new();
+        // Always use filename as session ID - this is what Claude uses to find sessions.
+        // The sessionId field in entries can differ (e.g., agent sessions have parent's ID).
+        let session_id = file_path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
         let mut project_path = String::new();
         let mut slug: Option<String> = None;
         let mut git_branch: Option<String> = None;
@@ -146,9 +155,6 @@ impl SessionStore {
                 message_count += 1;
 
                 // Get session metadata from first entry
-                if session_id.is_empty() {
-                    session_id = entry.session_id.clone();
-                }
                 if project_path.is_empty() {
                     if let Some(cwd) = &entry.cwd {
                         project_path = cwd.clone();
@@ -200,15 +206,6 @@ impl SessionStore {
         let first_message =
             first_message.context("Session has no messages")?;
         let last_message = last_message.unwrap_or(first_message);
-
-        // If we couldn't get session_id from entries, use filename
-        if session_id.is_empty() {
-            session_id = file_path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-        }
 
         // Decode project path from directory name if not found in entries
         if project_path.is_empty() {
