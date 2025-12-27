@@ -481,15 +481,13 @@ async fn main() -> Result<()> {
                         .arg("--directory")
                         .arg(&project_path)
                         .arg(&editor)
-                        .arg(&project_path)
                         .spawn()
                 }
                 "wezterm" => {
                     let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' -- {} '{}' >/dev/null 2>&1 &",
+                        "nohup wezterm start --always-new-process --cwd '{}' -- {} >/dev/null 2>&1 &",
                         project_path.replace('\'', "'\\''"),
-                        editor,
-                        project_path.replace('\'', "'\\''")
+                        editor
                     );
                     let result = std::process::Command::new("sh")
                         .arg("-c")
@@ -503,16 +501,14 @@ async fn main() -> Result<()> {
                     .arg(&project_path)
                     .arg("-e")
                     .arg(&editor)
-                    .arg(&project_path)
                     .spawn(),
                 "foot" => std::process::Command::new("foot")
                     .arg("--working-directory")
                     .arg(&project_path)
                     .arg(&editor)
-                    .arg(&project_path)
                     .spawn(),
                 _ => {
-                    let cmd = format!("cd {} && {} {}", shell_escape(&project_path), editor, shell_escape(&project_path));
+                    let cmd = format!("cd {} && {}", shell_escape(&project_path), editor);
                     std::process::Command::new("x-terminal-emulator")
                         .arg("-e")
                         .arg("sh")
