@@ -2,18 +2,12 @@
 
 use rand::seq::SliceRandom;
 
-/// ANSI-colored comic book style arts (generated from Gemini images via chafa)
-pub const REKALL_COMIC: &str = include_str!("../../assets/rekall_comic.ansi");
-pub const KUATO_COMIC: &str = include_str!("../../assets/kuato_comic.ansi");
+/// ANSI-colored comic book style art (generated from Gemini images via chafa)
 pub const MARS_COMIC: &str = include_str!("../../assets/mars_comic.ansi");
 
-/// All available colored comic arts
-const COMIC_ARTS: &[&str] = &[REKALL_COMIC, KUATO_COMIC, MARS_COMIC];
-
-/// Returns a randomly selected colored comic art piece.
+/// Returns the colored comic art piece.
 pub fn random_comic_art() -> &'static str {
-    let mut rng = rand::thread_rng();
-    COMIC_ARTS.choose(&mut rng).copied().unwrap_or(REKALL_COMIC)
+    MARS_COMIC
 }
 
 /// Quaid/Arnold portrait - stylized action hero face
