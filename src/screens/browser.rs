@@ -2,10 +2,11 @@
 
 use async_trait::async_trait;
 use crossterm::event::{KeyCode, KeyEvent};
+use ansi_to_tui::IntoText;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
@@ -45,6 +46,8 @@ pub struct BrowserScreen {
 
     // Splash art (randomly selected on startup)
     splash_art: &'static str,
+    // Colored comic art (randomly selected on startup)
+    comic_art: &'static str,
 }
 
 impl BrowserScreen {
@@ -64,6 +67,7 @@ impl BrowserScreen {
             projects: Vec::new(),
             current_sessions: Vec::new(),
             splash_art: ascii_art::random_art(),
+            comic_art: ascii_art::random_comic_art(),
         }
     }
 
@@ -263,8 +267,10 @@ impl Screen for BrowserScreen {
 
         // Preview pane (prominent, top right)
         // Show ASCII art when on Projects view, show session preview when on Sessions view
-        let (preview_title, preview_text) = if self.focus == Focus::Projects {
-            ("total-recall", self.splash_art.to_string())
+        let use_colored_art = self.focus == Focus::Projects;
+        let (preview_title, preview_text) = if use_colored_art {
+            // Use colored ANSI art - will be rendered separately
+            ("total-recall", String::new())
         } else if let Some(session) = self.selected_session() {
             let branch_info = session
                 .git_branch
@@ -294,11 +300,41 @@ impl Screen for BrowserScreen {
             .borders(Borders::ALL)
             .title(preview_title);
 
-        // Don't wrap ASCII art, only wrap preview text
-        if self.focus == Focus::Projects {
-            let preview = Paragraph::new(preview_text)
-                .block(preview_block)
-                .style(Style::default().fg(self.theme.color6));
+        // Render colored ANSI art or plain text preview
+        if use_colored_art {
+            // Parse ANSI escape sequences into ratatui Text
+            let mut ansi_text = self.comic_art
+                .into_text()
+                .unwrap_or_else(|_| Text::raw(self.splash_art));
+
+            // Add instructions below the art
+            ansi_text.lines.push(Line::raw(""));
+            ansi_text.lines.push(Line::from(vec![
+                Span::styled("     \"Get your ass to Claude.\"", Style::default().fg(self.theme.color6)),
+            ]));
+            ansi_text.lines.push(Line::raw(""));
+            ansi_text.lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled("g", Style::default().fg(self.theme.color8)),
+                Span::styled(" Git  ", Style::default().fg(self.theme.color7)),
+                Span::styled("b", Style::default().fg(self.theme.color8)),
+                Span::styled(" GitHub  ", Style::default().fg(self.theme.color7)),
+                Span::styled("t", Style::default().fg(self.theme.color8)),
+                Span::styled(" Terminal  ", Style::default().fg(self.theme.color7)),
+                Span::styled("e", Style::default().fg(self.theme.color8)),
+                Span::styled(" Editor", Style::default().fg(self.theme.color7)),
+            ]));
+            ansi_text.lines.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled("Enter", Style::default().fg(self.theme.color8)),
+                Span::styled(" Resume  ", Style::default().fg(self.theme.color7)),
+                Span::styled("n", Style::default().fg(self.theme.color8)),
+                Span::styled(" New  ", Style::default().fg(self.theme.color7)),
+                Span::styled("q", Style::default().fg(self.theme.color8)),
+                Span::styled(" Quit", Style::default().fg(self.theme.color7)),
+            ]));
+
+            let preview = Paragraph::new(ansi_text).block(preview_block);
 
             let garnished_preview = preview
                 .garnish(Padding::horizontal(1))
