@@ -67,6 +67,39 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Build a tmux session name from project path and session ID.
+fn build_tmux_session_name(project_path: &str, session_id: Option<&str>) -> String {
+    let name = std::path::Path::new(project_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("session");
+
+    match session_id {
+        Some(id) => format!("tr-{}-{}", name, &id[..8.min(id.len())]),
+        None => {
+            // Use timestamp to ensure unique session names for new sessions
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("tr-{}-{}", name, ts)
+        }
+    }
+}
+
+/// Build the tmux status line content showing project and session info.
+fn build_tmux_status(project_path: &str, session_id: Option<&str>) -> String {
+    let name = std::path::Path::new(project_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(project_path);
+
+    match session_id {
+        Some(id) => format!("[{}] {}", name, &id[..8.min(id.len())]),
+        None => format!("[{}]", name),
+    }
+}
+
 /// Parse a git remote URL to a GitHub browser URL.
 fn git_remote_to_github_url(remote: &str) -> Option<String> {
     let remote = remote.trim();
@@ -138,41 +171,69 @@ async fn main() -> Result<()> {
     match app.run().await? {
         app::AppResult::Exit => {}
         app::AppResult::NewSession { project_path } => {
-            // Spawn a new terminal with a fresh claude session
+            // Spawn a new terminal with a fresh claude session using tmux for persistent header
             let terminal = detect_terminal();
-            let claude_cmd = format!("cd {} && claude",
-                shell_escape(&project_path));
+            let tmux_session = build_tmux_session_name(&project_path, None);
+            let status_text = build_tmux_status(&project_path, None);
+
+            // Build tmux command with status bar at top (hide window list)
+            // Run claude directly as the session command instead of send-keys
+            let tmux_cmd = format!(
+                "tmux new-session -s {} -c {} 'claude; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
+                shell_escape(&tmux_session),
+                shell_escape(&project_path),
+                status_text.replace('\'', "'\\''")
+            );
 
             let result = match terminal.as_str() {
-                "kitty" => {
-                    let cmd = "claude; echo ''; echo 'Session ended. Press Enter to close...'; read";
-                    std::process::Command::new("kitty")
-                        .arg("--detach")
-                        .arg("--directory")
-                        .arg(&project_path)
-                        .arg("bash")
-                        .arg("-c")
-                        .arg(cmd)
-                        .spawn()
-                }
+                "kitty" => std::process::Command::new("kitty")
+                    .arg("--detach")
+                    .arg("--directory")
+                    .arg(&project_path)
+                    .arg("bash")
+                    .arg("-c")
+                    .arg(&tmux_cmd)
+                    .spawn(),
                 "alacritty" => std::process::Command::new("alacritty")
                     .arg("-e")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "foot" => std::process::Command::new("foot")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "wezterm" => {
-                    let cmd = "claude; echo ''; echo 'Session ended. Press Enter to close...'; read";
-                    let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' -- bash -c '{}' >/dev/null 2>&1 &",
+                    let log_path = format!("{}/.total-recall-spawn.log", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+
+                    // Write tmux command to script to avoid quoting issues
+                    let script_path = format!("{}/.total-recall-launch.sh", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+                    let script_content = format!(
+                        "#!/bin/bash\ncd '{}'\n{}\n",
                         project_path.replace('\'', "'\\''"),
-                        cmd.replace('\'', "'\\''")
+                        tmux_cmd
                     );
+                    let _ = std::fs::write(&script_path, &script_content);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+                    }
+
+                    let spawn_cmd = format!(
+                        "nohup wezterm start --always-new-process --cwd '{}' -- bash '{}' >/dev/null 2>&1 &",
+                        project_path.replace('\'', "'\\''"),
+                        script_path
+                    );
+
+                    // Log for debugging
+                    let _ = std::fs::write(&log_path, format!(
+                        "=== NEW SESSION ===\nproject_path: {}\ntmux_session: {}\nscript:\n{}\nspawn_cmd: {}\n",
+                        project_path, tmux_session, script_content, spawn_cmd
+                    ));
+
                     let result = std::process::Command::new("sh")
                         .arg("-c")
                         .arg(&spawn_cmd)
@@ -182,27 +243,27 @@ async fn main() -> Result<()> {
                 }
                 "gnome-terminal" => std::process::Command::new("gnome-terminal")
                     .arg("--")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "konsole" => std::process::Command::new("konsole")
                     .arg("-e")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "xterm" => std::process::Command::new("xterm")
                     .arg("-e")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 _ => std::process::Command::new("x-terminal-emulator")
                     .arg("-e")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
             };
 
@@ -222,65 +283,76 @@ async fn main() -> Result<()> {
             }
         }
         app::AppResult::LaunchSession { session_id, project_path } => {
-            // Spawn a new terminal with the claude resume command
+            // Spawn a new terminal with the claude resume command using tmux for persistent header
             let terminal = detect_terminal();
+            let tmux_session = build_tmux_session_name(&project_path, Some(&session_id));
+            let status_text = build_tmux_status(&project_path, Some(&session_id));
 
-            // Log to file for debugging - use home dir to avoid any /tmp issues
-            use std::io::Write;
+            // Log to file for debugging
             let log_path = format!("{}/.total-recall-spawn.log", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
             let _ = std::fs::write(&log_path, format!(
-                "=== LAUNCH ===\nterminal: {}\nsession_id: {}\nproject_path: {}\n",
-                terminal, session_id, project_path
+                "=== LAUNCH ===\nterminal: {}\nsession_id: {}\nproject_path: {}\ntmux_session: {}\n",
+                terminal, session_id, project_path, tmux_session
             ));
-            let claude_cmd = format!("cd {} && claude --resume {}",
+
+            // Build tmux command with status bar at top (hide window list)
+            // Run claude directly as the session command instead of send-keys
+            let tmux_cmd = format!(
+                "tmux new-session -s {} -c {} 'claude --resume {}; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
+                shell_escape(&tmux_session),
                 shell_escape(&project_path),
-                shell_escape(&session_id));
+                shell_escape(&session_id),
+                status_text.replace('\'', "'\\''")
+            );
 
             let result = match terminal.as_str() {
-                "kitty" => {
-                    let cmd = format!(
-                        "cd {} && claude --resume {}; echo ''; echo 'Session ended. Press Enter to close...'; read",
-                        shell_escape(&project_path),
-                        shell_escape(&session_id)
-                    );
-                    std::process::Command::new("kitty")
-                        .arg("--detach")
-                        .arg("--directory")
-                        .arg(&project_path)
-                        .arg("bash")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .spawn()
-                }
+                "kitty" => std::process::Command::new("kitty")
+                    .arg("--detach")
+                    .arg("--directory")
+                    .arg(&project_path)
+                    .arg("bash")
+                    .arg("-c")
+                    .arg(&tmux_cmd)
+                    .spawn(),
                 "alacritty" => std::process::Command::new("alacritty")
                     .arg("-e")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "foot" => std::process::Command::new("foot")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "wezterm" => {
                     use std::io::Write;
                     let log_path = format!("{}/.total-recall-spawn.log", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
 
-                    let cmd = format!(
-                        "claude --resume {}; echo ''; echo 'Session ended. Press Enter to close...'; read",
-                        shell_escape(&session_id)
-                    );
-
-                    // Use sh -c with nohup and & to fully detach from parent
-                    let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' -- bash -c '{}' >/dev/null 2>&1 &",
+                    // Write tmux command to script to avoid quoting issues
+                    let script_path = format!("{}/.total-recall-launch.sh", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+                    let script_content = format!(
+                        "#!/bin/bash\ncd '{}'\n{}\n",
                         project_path.replace('\'', "'\\''"),
-                        cmd.replace('\'', "'\\''")
+                        tmux_cmd
+                    );
+                    let _ = std::fs::write(&script_path, &script_content);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+                    }
+
+                    let spawn_cmd = format!(
+                        "nohup wezterm start --always-new-process --cwd '{}' -- bash '{}' >/dev/null 2>&1 &",
+                        project_path.replace('\'', "'\\''"),
+                        script_path
                     );
 
                     // Append to log
                     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+                        let _ = writeln!(f, "tmux_cmd: {}", tmux_cmd);
+                        let _ = writeln!(f, "script_content:\n{}", script_content);
                         let _ = writeln!(f, "spawn_cmd: {}", spawn_cmd);
                     }
 
@@ -293,36 +365,34 @@ async fn main() -> Result<()> {
                         let _ = writeln!(f, "spawn result: {:?}", result.as_ref().map(|c| c.id()));
                     }
 
-                    // Small delay to ensure child starts before we exit
                     std::thread::sleep(std::time::Duration::from_millis(200));
-
                     result
                 }
                 "gnome-terminal" => std::process::Command::new("gnome-terminal")
                     .arg("--")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "konsole" => std::process::Command::new("konsole")
                     .arg("-e")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 "xterm" => std::process::Command::new("xterm")
                     .arg("-e")
-                    .arg("sh")
+                    .arg("bash")
                     .arg("-c")
-                    .arg(&claude_cmd)
+                    .arg(&tmux_cmd)
                     .spawn(),
                 _ => {
-                    // Fallback: try x-terminal-emulator or just run in same terminal
+                    // Fallback: try x-terminal-emulator
                     std::process::Command::new("x-terminal-emulator")
                         .arg("-e")
-                        .arg("sh")
+                        .arg("bash")
                         .arg("-c")
-                        .arg(&claude_cmd)
+                        .arg(&tmux_cmd)
                         .spawn()
                 }
             };
