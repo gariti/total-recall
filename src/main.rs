@@ -178,8 +178,9 @@ async fn main() -> Result<()> {
 
             // Build tmux command with status bar at top (hide window list)
             // Run claude directly as the session command instead of send-keys
+            // Use -A to attach to existing session or create new (avoids "duplicate session" error)
             let tmux_cmd = format!(
-                "tmux new-session -s {} -c {} 'claude; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
+                "tmux new-session -A -s {} -c {} 'claude; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
                 shell_escape(&tmux_session),
                 shell_escape(&project_path),
                 status_text.replace('\'', "'\\''")
@@ -297,11 +298,13 @@ async fn main() -> Result<()> {
 
             // Build tmux command with status bar at top (hide window list)
             // Run claude directly as the session command instead of send-keys
+            // Note: session_id is inside single quotes in the command, so escape quotes instead of wrapping
+            // Use -A to attach to existing session or create new (avoids "duplicate session" error)
             let tmux_cmd = format!(
-                "tmux new-session -s {} -c {} 'claude --resume {}; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
+                "tmux new-session -A -s {} -c {} 'claude --resume {}; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
                 shell_escape(&tmux_session),
                 shell_escape(&project_path),
-                shell_escape(&session_id),
+                session_id.replace('\'', "'\\''"),
                 status_text.replace('\'', "'\\''")
             );
 
