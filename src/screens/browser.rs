@@ -364,9 +364,10 @@ impl Screen for BrowserScreen {
                     let preview = if s.preview_text.is_empty() {
                         s.display_name()
                     } else {
-                        // Truncate to fit in list
-                        if s.preview_text.len() > 60 {
-                            format!("{}...", &s.preview_text[..60])
+                        // Truncate to fit in list (by chars, not bytes, to avoid UTF-8 panic)
+                        let chars: Vec<char> = s.preview_text.chars().collect();
+                        if chars.len() > 60 {
+                            format!("{}...", chars[..60].iter().collect::<String>())
                         } else {
                             s.preview_text.clone()
                         }

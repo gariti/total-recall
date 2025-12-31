@@ -191,9 +191,10 @@ impl SessionStore {
                             .map(|c| if c.is_control() { ' ' } else { c })
                             .collect();
                         let sanitized = sanitized.trim();
-                        // Truncate to reasonable preview length
-                        preview_text = if sanitized.len() > 200 {
-                            format!("{}...", &sanitized[..200])
+                        // Truncate to reasonable preview length (by chars to avoid UTF-8 panic)
+                        let chars: Vec<char> = sanitized.chars().collect();
+                        preview_text = if chars.len() > 200 {
+                            format!("{}...", chars[..200].iter().collect::<String>())
                         } else {
                             sanitized.to_string()
                         };
