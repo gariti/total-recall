@@ -1591,6 +1591,7 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs",
+ "libc",
  "open",
  "rand",
  "ratatui",

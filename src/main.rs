@@ -14,8 +14,25 @@ mod utils;
 
 use anyhow::Result;
 use clap::Parser;
+use std::os::unix::process::CommandExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use std::path::Path;
+
+/// Spawn a command detached from the current terminal session.
+///
+/// Uses setsid() in a pre_exec hook to create a new session, so the child
+/// won't receive SIGHUP when the parent terminal (e.g. quake ghostty) closes.
+fn spawn_detached(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+}
 
 /// total-recall - Claude Sessions Browser
 #[derive(Parser, Debug)]
@@ -34,37 +51,26 @@ struct Args {
     claude_dir: Option<String>,
 }
 
-/// Detect the terminal emulator to use.
-fn detect_terminal() -> String {
-    // Check TERMINAL env var first
-    if let Ok(term) = std::env::var("TERMINAL") {
-        // Extract just the binary name
-        let name = Path::new(&term)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(&term);
-        return name.to_string();
-    }
-
-    // Try to detect from common terminals (wezterm preferred)
-    let terminals = ["wezterm", "kitty", "alacritty", "foot", "gnome-terminal", "konsole", "xterm"];
-    for term in terminals {
-        if std::process::Command::new("which")
-            .arg(term)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return term.to_string();
-        }
-    }
-
-    "xterm".to_string()
+/// Build a ghostty command for spawning a new terminal window.
+///
+/// Uses plain `ghostty` (new process) rather than `+new-window` (D-Bus IPC).
+/// In ghostty 1.3.0-dev, `+new-window -e` silently ignores the command —
+/// the window opens with the default shell instead. Plain `ghostty` supports
+/// all flags: -e, --working-directory, --class, --font-size, etc.
+fn ghostty_command() -> std::process::Command {
+    std::process::Command::new("ghostty")
 }
 
-/// Escape a string for shell usage.
-fn shell_escape(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
+/// Append tmux status bar configuration args to a command.
+fn append_tmux_status_args(cmd: &mut std::process::Command, status_text: &str) {
+    cmd.arg(";").arg("set").arg("status").arg("on")
+        .arg(";").arg("set").arg("status-position").arg("top")
+        .arg(";").arg("set").arg("status-style").arg("bg=blue,fg=white,bold")
+        .arg(";").arg("set").arg("status-left-length").arg("100")
+        .arg(";").arg("set").arg("status-left").arg(format!(" {} ", status_text))
+        .arg(";").arg("set").arg("status-right").arg("")
+        .arg(";").arg("set").arg("window-status-format").arg("")
+        .arg(";").arg("set").arg("window-status-current-format").arg("");
 }
 
 /// Build a tmux session name from project path and session ID.
@@ -166,307 +172,78 @@ async fn main() -> Result<()> {
         config.claude.claude_dir = claude_dir;
     }
 
+    let skip_perms = config.claude.dangerously_skip_permissions;
+    let skip_perms_flag = if skip_perms { " --dangerously-skip-permissions" } else { "" };
+
     // Run the TUI application
     let mut app = app::App::new(config).await?;
     match app.run().await? {
         app::AppResult::Exit => {}
         app::AppResult::NewSession { project_path } => {
-            // Spawn a new terminal with a fresh claude session using tmux for persistent header
-            let terminal = detect_terminal();
             let tmux_session = build_tmux_session_name(&project_path, None);
             let status_text = build_tmux_status(&project_path, None);
 
-            // Build tmux command with status bar at top (hide window list)
-            // Run claude directly as the session command instead of send-keys
-            // Use -A to attach to existing session or create new (avoids "duplicate session" error)
-            let tmux_cmd = format!(
-                "tmux new-session -A -s {} -c {} 'claude; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
-                shell_escape(&tmux_session),
-                shell_escape(&project_path),
-                status_text.replace('\'', "'\\''")
-            );
+            let mut cmd = ghostty_command();
+            cmd.arg("-e")
+                .arg("tmux").arg("new-session").arg("-A")
+                .arg("-s").arg(&tmux_session)
+                .arg("-c").arg(&project_path)
+                .arg(format!("claude{skip_perms_flag}; echo; echo Press Enter to close...; read"));
+            append_tmux_status_args(&mut cmd, &status_text);
 
-            let result = match terminal.as_str() {
-                "kitty" => std::process::Command::new("kitty")
-                    .arg("--detach")
-                    .arg("--directory")
-                    .arg(&project_path)
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "alacritty" => std::process::Command::new("alacritty")
-                    .arg("-e")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "foot" => std::process::Command::new("foot")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "wezterm" => {
-                    let log_path = format!("{}/.total-recall-spawn.log", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-
-                    // Write tmux command to script to avoid quoting issues
-                    let script_path = format!("{}/.total-recall-launch.sh", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-                    let script_content = format!(
-                        "#!/bin/bash\ncd '{}'\n{}\n",
-                        project_path.replace('\'', "'\\''"),
-                        tmux_cmd
-                    );
-                    let _ = std::fs::write(&script_path, &script_content);
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
-                    }
-
-                    let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' -- bash '{}' >/dev/null 2>&1 &",
-                        project_path.replace('\'', "'\\''"),
-                        script_path
-                    );
-
-                    // Log for debugging
-                    let _ = std::fs::write(&log_path, format!(
-                        "=== NEW SESSION ===\nproject_path: {}\ntmux_session: {}\nscript:\n{}\nspawn_cmd: {}\n",
-                        project_path, tmux_session, script_content, spawn_cmd
-                    ));
-
-                    let result = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&spawn_cmd)
-                        .spawn();
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    result
-                }
-                "gnome-terminal" => std::process::Command::new("gnome-terminal")
-                    .arg("--")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "konsole" => std::process::Command::new("konsole")
-                    .arg("-e")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "xterm" => std::process::Command::new("xterm")
-                    .arg("-e")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                _ => std::process::Command::new("x-terminal-emulator")
-                    .arg("-e")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-            };
-
-            if let Err(e) = result {
-                eprintln!("Failed to launch terminal '{}': {}", terminal, e);
-                eprintln!("Falling back to exec in current terminal...");
+            if let Err(e) = spawn_detached(&mut cmd) {
+                eprintln!("Failed to launch terminal: {}", e);
+                eprintln!("Falling back to running in current terminal...");
 
                 if let Err(e) = std::env::set_current_dir(&project_path) {
                     eprintln!("Failed to change to project directory '{}': {}", project_path, e);
                     std::process::exit(1);
                 }
-                use std::os::unix::process::CommandExt;
-                let err = std::process::Command::new("claude")
-                    .exec();
+                let mut fallback_cmd = std::process::Command::new("claude");
+                if skip_perms { fallback_cmd.arg("--dangerously-skip-permissions"); }
+                let err = fallback_cmd.exec();
                 eprintln!("Failed to launch claude: {}", err);
                 std::process::exit(1);
             }
         }
         app::AppResult::LaunchSession { session_id, project_path } => {
-            // Spawn a new terminal with the claude resume command using tmux for persistent header
-            let terminal = detect_terminal();
             let tmux_session = build_tmux_session_name(&project_path, Some(&session_id));
             let status_text = build_tmux_status(&project_path, Some(&session_id));
 
-            // Log to file for debugging
-            let log_path = format!("{}/.total-recall-spawn.log", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-            let _ = std::fs::write(&log_path, format!(
-                "=== LAUNCH ===\nterminal: {}\nsession_id: {}\nproject_path: {}\ntmux_session: {}\n",
-                terminal, session_id, project_path, tmux_session
-            ));
+            let resume_cmd = format!("claude{skip_perms_flag} --resume {session_id}; echo; echo Press Enter to close...; read");
+            let mut cmd = ghostty_command();
+            cmd.arg("-e")
+                .arg("tmux").arg("new-session").arg("-A")
+                .arg("-s").arg(&tmux_session)
+                .arg("-c").arg(&project_path)
+                .arg(&resume_cmd);
+            append_tmux_status_args(&mut cmd, &status_text);
 
-            // Build tmux command with status bar at top (hide window list)
-            // Run claude directly as the session command instead of send-keys
-            // Note: session_id is inside single quotes in the command, so escape quotes instead of wrapping
-            // Use -A to attach to existing session or create new (avoids "duplicate session" error)
-            let tmux_cmd = format!(
-                "tmux new-session -A -s {} -c {} 'claude --resume {}; echo; echo Press Enter to close...; read' \\; set status on \\; set status-position top \\; set status-style 'bg=blue,fg=white,bold' \\; set status-left-length 100 \\; set status-left ' {} ' \\; set status-right '' \\; set window-status-format '' \\; set window-status-current-format ''",
-                shell_escape(&tmux_session),
-                shell_escape(&project_path),
-                session_id.replace('\'', "'\\''"),
-                status_text.replace('\'', "'\\''")
-            );
+            if let Err(e) = spawn_detached(&mut cmd) {
+                eprintln!("Failed to launch terminal: {}", e);
+                eprintln!("Falling back to running in current terminal...");
 
-            let result = match terminal.as_str() {
-                "kitty" => std::process::Command::new("kitty")
-                    .arg("--detach")
-                    .arg("--directory")
-                    .arg(&project_path)
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "alacritty" => std::process::Command::new("alacritty")
-                    .arg("-e")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "foot" => std::process::Command::new("foot")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "wezterm" => {
-                    use std::io::Write;
-                    let log_path = format!("{}/.total-recall-spawn.log", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-
-                    // Write tmux command to script to avoid quoting issues
-                    let script_path = format!("{}/.total-recall-launch.sh", std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
-                    let script_content = format!(
-                        "#!/bin/bash\ncd '{}'\n{}\n",
-                        project_path.replace('\'', "'\\''"),
-                        tmux_cmd
-                    );
-                    let _ = std::fs::write(&script_path, &script_content);
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
-                    }
-
-                    let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' -- bash '{}' >/dev/null 2>&1 &",
-                        project_path.replace('\'', "'\\''"),
-                        script_path
-                    );
-
-                    // Append to log
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
-                        let _ = writeln!(f, "tmux_cmd: {}", tmux_cmd);
-                        let _ = writeln!(f, "script_content:\n{}", script_content);
-                        let _ = writeln!(f, "spawn_cmd: {}", spawn_cmd);
-                    }
-
-                    let result = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&spawn_cmd)
-                        .spawn();
-
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
-                        let _ = writeln!(f, "spawn result: {:?}", result.as_ref().map(|c| c.id()));
-                    }
-
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    result
-                }
-                "gnome-terminal" => std::process::Command::new("gnome-terminal")
-                    .arg("--")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "konsole" => std::process::Command::new("konsole")
-                    .arg("-e")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                "xterm" => std::process::Command::new("xterm")
-                    .arg("-e")
-                    .arg("bash")
-                    .arg("-c")
-                    .arg(&tmux_cmd)
-                    .spawn(),
-                _ => {
-                    // Fallback: try x-terminal-emulator
-                    std::process::Command::new("x-terminal-emulator")
-                        .arg("-e")
-                        .arg("bash")
-                        .arg("-c")
-                        .arg(&tmux_cmd)
-                        .spawn()
-                }
-            };
-
-            if let Err(e) = result {
-                eprintln!("Failed to launch terminal '{}': {}", terminal, e);
-                eprintln!("Falling back to exec in current terminal...");
-
-                // Fallback to original behavior
                 if let Err(e) = std::env::set_current_dir(&project_path) {
                     eprintln!("Failed to change to project directory '{}': {}", project_path, e);
                     std::process::exit(1);
                 }
-                use std::os::unix::process::CommandExt;
-                let err = std::process::Command::new("claude")
-                    .arg("--resume")
-                    .arg(&session_id)
-                    .exec();
+                let mut fallback_cmd = std::process::Command::new("claude");
+                if skip_perms { fallback_cmd.arg("--dangerously-skip-permissions"); }
+                let err = fallback_cmd.arg("--resume").arg(&session_id).exec();
                 eprintln!("Failed to launch claude: {}", err);
                 std::process::exit(1);
             }
-            // New terminal spawned successfully, exit this instance
         }
         app::AppResult::OpenLazygit { project_path } => {
-            // Spawn a terminal with lazygit in the project directory
-            let terminal = detect_terminal();
+            let tmux_session = build_tmux_session_name(&project_path, None);
+            let mut cmd = ghostty_command();
+            cmd.arg("-e")
+                .arg("tmux").arg("new-session").arg("-A")
+                .arg("-s").arg(&tmux_session)
+                .arg("-c").arg(&project_path)
+                .arg("lazygit");
 
-            let result = match terminal.as_str() {
-                "kitty" => {
-                    std::process::Command::new("kitty")
-                        .arg("--detach")
-                        .arg("--directory")
-                        .arg(&project_path)
-                        .arg("lazygit")
-                        .spawn()
-                }
-                "wezterm" => {
-                    let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' -- lazygit >/dev/null 2>&1 &",
-                        project_path.replace('\'', "'\\''")
-                    );
-                    let result = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&spawn_cmd)
-                        .spawn();
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    result
-                }
-                "alacritty" => std::process::Command::new("alacritty")
-                    .arg("--working-directory")
-                    .arg(&project_path)
-                    .arg("-e")
-                    .arg("lazygit")
-                    .spawn(),
-                "foot" => std::process::Command::new("foot")
-                    .arg("--working-directory")
-                    .arg(&project_path)
-                    .arg("lazygit")
-                    .spawn(),
-                _ => {
-                    let cmd = format!("cd {} && lazygit", shell_escape(&project_path));
-                    std::process::Command::new("x-terminal-emulator")
-                        .arg("-e")
-                        .arg("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .spawn()
-                }
-            };
-
-            if let Err(e) = result {
+            if let Err(e) = spawn_detached(&mut cmd) {
                 eprintln!("Failed to launch lazygit: {}", e);
             }
         }
@@ -485,110 +262,28 @@ async fn main() -> Result<()> {
             }
         }
         app::AppResult::OpenTerminal { project_path } => {
-            // Spawn a terminal in the project directory
-            let terminal = detect_terminal();
+            let tmux_session = build_tmux_session_name(&project_path, None);
+            let mut cmd = ghostty_command();
+            cmd.arg("-e")
+                .arg("tmux").arg("new-session").arg("-A")
+                .arg("-s").arg(&tmux_session)
+                .arg("-c").arg(&project_path);
 
-            let result = match terminal.as_str() {
-                "kitty" => {
-                    std::process::Command::new("kitty")
-                        .arg("--detach")
-                        .arg("--directory")
-                        .arg(&project_path)
-                        .spawn()
-                }
-                "wezterm" => {
-                    let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' >/dev/null 2>&1 &",
-                        project_path.replace('\'', "'\\''")
-                    );
-                    let result = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&spawn_cmd)
-                        .spawn();
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    result
-                }
-                "alacritty" => std::process::Command::new("alacritty")
-                    .arg("--working-directory")
-                    .arg(&project_path)
-                    .spawn(),
-                "foot" => std::process::Command::new("foot")
-                    .arg("--working-directory")
-                    .arg(&project_path)
-                    .spawn(),
-                "gnome-terminal" => std::process::Command::new("gnome-terminal")
-                    .arg("--working-directory")
-                    .arg(&project_path)
-                    .spawn(),
-                "konsole" => std::process::Command::new("konsole")
-                    .arg("--workdir")
-                    .arg(&project_path)
-                    .spawn(),
-                _ => {
-                    let cmd = format!("cd {}", shell_escape(&project_path));
-                    std::process::Command::new("x-terminal-emulator")
-                        .arg("-e")
-                        .arg("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .spawn()
-                }
-            };
-
-            if let Err(e) = result {
+            if let Err(e) = spawn_detached(&mut cmd) {
                 eprintln!("Failed to open terminal: {}", e);
             }
         }
         app::AppResult::OpenEditor { project_path } => {
-            // Get editor from $EDITOR env var
             let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".to_string());
-            let terminal = detect_terminal();
+            let tmux_session = build_tmux_session_name(&project_path, None);
+            let mut cmd = ghostty_command();
+            cmd.arg("-e")
+                .arg("tmux").arg("new-session").arg("-A")
+                .arg("-s").arg(&tmux_session)
+                .arg("-c").arg(&project_path)
+                .arg(&editor);
 
-            let result = match terminal.as_str() {
-                "kitty" => {
-                    std::process::Command::new("kitty")
-                        .arg("--detach")
-                        .arg("--directory")
-                        .arg(&project_path)
-                        .arg(&editor)
-                        .spawn()
-                }
-                "wezterm" => {
-                    let spawn_cmd = format!(
-                        "nohup wezterm start --always-new-process --cwd '{}' -- {} >/dev/null 2>&1 &",
-                        project_path.replace('\'', "'\\''"),
-                        editor
-                    );
-                    let result = std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(&spawn_cmd)
-                        .spawn();
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    result
-                }
-                "alacritty" => std::process::Command::new("alacritty")
-                    .arg("--working-directory")
-                    .arg(&project_path)
-                    .arg("-e")
-                    .arg(&editor)
-                    .spawn(),
-                "foot" => std::process::Command::new("foot")
-                    .arg("--working-directory")
-                    .arg(&project_path)
-                    .arg(&editor)
-                    .spawn(),
-                _ => {
-                    let cmd = format!("cd {} && {}", shell_escape(&project_path), editor);
-                    std::process::Command::new("x-terminal-emulator")
-                        .arg("-e")
-                        .arg("sh")
-                        .arg("-c")
-                        .arg(&cmd)
-                        .spawn()
-                }
-            };
-
-            if let Err(e) = result {
+            if let Err(e) = spawn_detached(&mut cmd) {
                 eprintln!("Failed to open editor: {}", e);
             }
         }

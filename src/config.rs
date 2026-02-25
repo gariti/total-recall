@@ -29,12 +29,16 @@ pub struct ClaudeConfig {
     /// Path to Claude directory (default: ~/.claude)
     #[serde(default = "default_claude_dir")]
     pub claude_dir: String,
+    /// Pass --dangerously-skip-permissions when launching Claude
+    #[serde(default)]
+    pub dangerously_skip_permissions: bool,
 }
 
 impl Default for ClaudeConfig {
     fn default() -> Self {
         Self {
             claude_dir: default_claude_dir(),
+            dangerously_skip_permissions: false,
         }
     }
 }
