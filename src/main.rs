@@ -7,6 +7,7 @@
 
 mod app;
 mod config;
+mod event;
 mod models;
 mod screens;
 mod services;

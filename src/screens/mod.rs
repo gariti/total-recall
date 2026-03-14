@@ -1,11 +1,14 @@
 //! TUI screens.
 
+pub mod agent_detail;
 pub mod browser;
-// pub mod preview;
-// pub mod search;
-// pub mod stats;
+pub mod dashboard;
+pub mod spawn_wizard;
 
+pub use agent_detail::AgentDetailScreen;
 pub use browser::BrowserScreen;
+pub use dashboard::DashboardScreen;
+pub use spawn_wizard::SpawnWizard;
 
 use async_trait::async_trait;
 use crossterm::event::KeyEvent;
@@ -31,6 +34,18 @@ pub enum ScreenAction {
     OpenTerminal { project_path: String },
     /// Open editor in the project directory.
     OpenEditor { project_path: String },
+    /// Open the spawn wizard.
+    OpenSpawnWizard,
+    /// Kill an agent by index.
+    KillAgent { index: usize },
+    /// Delete an agent by index.
+    DeleteAgent { index: usize },
+    /// Focus on an agent (switch to detail view).
+    FocusAgent { index: usize },
+    /// Attach to an agent's tmux session in a new terminal.
+    AttachAgent { index: usize },
+    /// Go back from detail to dashboard.
+    BackToDashboard,
 }
 
 /// Trait for screen implementations.

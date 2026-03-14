@@ -95,12 +95,3 @@ Sessions are stored in `~/.claude/projects/<encoded-path>/`:
 - `Enter` or `y` - Copy resume command to clipboard
 - `q` or `Ctrl+C` - Quit
 
-## Development Workflow
-
-**IMPORTANT: Always verify code compiles after making changes.**
-
-- After any code modifications, run `cargo check` to verify the code compiles without errors
-- Fix any compilation errors before considering the task complete
-- Run `cargo check` before committing
-- Use `cargo run` for quick testing
-- Build release with `cargo build --release`

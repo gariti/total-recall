@@ -99,6 +99,11 @@ impl BrowserScreen {
         self.session_store.total_session_count()
     }
 
+    /// Get the list of projects (for spawn wizard).
+    pub fn projects(&self) -> &[Project] {
+        &self.projects
+    }
+
     /// Get currently selected project.
     fn selected_project(&self) -> Option<&Project> {
         self.project_state
@@ -315,22 +320,22 @@ impl Screen for BrowserScreen {
             ansi_text.lines.push(Line::raw(""));
             ansi_text.lines.push(Line::from(vec![
                 Span::raw("     "),
-                Span::styled("g", Style::default().fg(self.theme.color8)),
+                Span::styled("F2", Style::default().fg(self.theme.color8)),
                 Span::styled(" Git  ", Style::default().fg(self.theme.color7)),
-                Span::styled("b", Style::default().fg(self.theme.color8)),
+                Span::styled("F3", Style::default().fg(self.theme.color8)),
                 Span::styled(" GitHub  ", Style::default().fg(self.theme.color7)),
-                Span::styled("t", Style::default().fg(self.theme.color8)),
+                Span::styled("F4", Style::default().fg(self.theme.color8)),
                 Span::styled(" Terminal  ", Style::default().fg(self.theme.color7)),
-                Span::styled("e", Style::default().fg(self.theme.color8)),
+                Span::styled("F5", Style::default().fg(self.theme.color8)),
                 Span::styled(" Editor", Style::default().fg(self.theme.color7)),
             ]));
             ansi_text.lines.push(Line::from(vec![
                 Span::raw("     "),
                 Span::styled("Enter", Style::default().fg(self.theme.color8)),
                 Span::styled(" Resume  ", Style::default().fg(self.theme.color7)),
-                Span::styled("n", Style::default().fg(self.theme.color8)),
+                Span::styled("Ins", Style::default().fg(self.theme.color8)),
                 Span::styled(" New  ", Style::default().fg(self.theme.color7)),
-                Span::styled("q", Style::default().fg(self.theme.color8)),
+                Span::styled("Esc", Style::default().fg(self.theme.color8)),
                 Span::styled(" Quit", Style::default().fg(self.theme.color7)),
             ]));
 
@@ -436,22 +441,22 @@ impl BrowserScreen {
     /// Handle key event and return action.
     pub async fn handle_key(&mut self, key: KeyEvent) -> ScreenAction {
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.move_up();
                 ScreenAction::None
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.move_down();
                 ScreenAction::None
             }
-            KeyCode::Left | KeyCode::Char('h') => {
+            KeyCode::Left => {
                 if self.focus == Focus::Sessions {
                     self.focus = Focus::Projects;
                     self.sessions_visible = false;
                 }
                 ScreenAction::None
             }
-            KeyCode::Right | KeyCode::Char('l') => {
+            KeyCode::Right => {
                 if self.focus == Focus::Projects && !self.current_sessions.is_empty() {
                     self.sessions_visible = true;
                     self.focus = Focus::Sessions;
@@ -474,7 +479,7 @@ impl BrowserScreen {
                 };
                 ScreenAction::None
             }
-            KeyCode::Enter | KeyCode::Char('y') => {
+            KeyCode::Enter => {
                 match self.focus {
                     Focus::Projects => {
                         // Enter on project shows sessions and switches to sessions pane
@@ -496,7 +501,7 @@ impl BrowserScreen {
                     }
                 }
             }
-            KeyCode::Char('n') => {
+            KeyCode::Insert => {
                 // Start a new session in the selected project
                 if let Some(project) = self.selected_project() {
                     ScreenAction::NewSession {
@@ -506,7 +511,7 @@ impl BrowserScreen {
                     ScreenAction::None
                 }
             }
-            KeyCode::Char('g') => {
+            KeyCode::F(2) => {
                 // Open lazygit in the project directory
                 if let Some(project) = self.selected_project() {
                     ScreenAction::OpenLazygit {
@@ -516,7 +521,7 @@ impl BrowserScreen {
                     ScreenAction::None
                 }
             }
-            KeyCode::Char('b') => {
+            KeyCode::F(3) => {
                 // Open GitHub in browser
                 if let Some(project) = self.selected_project() {
                     ScreenAction::OpenGithub {
@@ -526,7 +531,7 @@ impl BrowserScreen {
                     ScreenAction::None
                 }
             }
-            KeyCode::Char('t') => {
+            KeyCode::F(4) => {
                 // Open terminal in the project directory
                 if let Some(project) = self.selected_project() {
                     ScreenAction::OpenTerminal {
@@ -536,7 +541,7 @@ impl BrowserScreen {
                     ScreenAction::None
                 }
             }
-            KeyCode::Char('e') => {
+            KeyCode::F(5) => {
                 // Open editor in the project directory
                 if let Some(project) = self.selected_project() {
                     ScreenAction::OpenEditor {
